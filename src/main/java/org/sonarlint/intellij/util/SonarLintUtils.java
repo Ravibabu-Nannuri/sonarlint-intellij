@@ -26,8 +26,11 @@ import com.intellij.openapi.editor.Document;
 import com.intellij.openapi.editor.Editor;
 import com.intellij.openapi.fileEditor.FileDocumentManager;
 import com.intellij.openapi.fileEditor.FileEditorManager;
+import com.intellij.openapi.module.Module;
 import com.intellij.openapi.project.Project;
 import com.intellij.openapi.roots.ContentEntry;
+import com.intellij.openapi.roots.JavaProjectRootsUtil;
+import com.intellij.openapi.roots.ModuleRootManager;
 import com.intellij.openapi.roots.SourceFolder;
 import com.intellij.openapi.util.text.StringUtil;
 import com.intellij.openapi.vfs.VfsUtil;
@@ -216,10 +219,18 @@ public class SonarLintUtils {
     }
   }
 
-  public static boolean isJavaGeneratedSource(SourceFolder source) {
-    // only return non-null if source has root type in JavaModuleSourceRootTypes.SOURCES
-    JavaSourceRootProperties properties = source.getJpsElement().getProperties(JavaModuleSourceRootTypes.SOURCES);
-    return properties != null && properties.isForGeneratedSources();
+  public static boolean isGeneratedSoruce(Module module, @Nullable VirtualFile sourceRoot) {
+    if (sourceRoot == null) {
+      return false;
+    }
+    for (ContentEntry entry : ModuleRootManager.getInstance(module).getContentEntries()) {
+      for (SourceFolder folder : entry.getSourceFolders()) {
+        if (sourceRoot.equals(folder.getFile())) {
+          return JavaProjectRootsUtil.isForGeneratedSources(folder);
+        }
+      }
+    }
+    return false;
   }
 
   public static boolean isJavaResource(SourceFolder source) {
