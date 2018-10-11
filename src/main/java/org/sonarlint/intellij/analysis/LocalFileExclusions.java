@@ -26,6 +26,7 @@ import com.intellij.openapi.module.Module;
 import com.intellij.openapi.project.Project;
 import com.intellij.openapi.roots.ProjectFileIndex;
 import com.intellij.openapi.roots.ProjectRootManager;
+import com.intellij.openapi.roots.SourceFolder;
 import com.intellij.openapi.vfs.VirtualFile;
 import com.intellij.util.messages.MessageBusConnection;
 import java.util.Collection;
@@ -51,9 +52,10 @@ public class LocalFileExclusions {
   private final SonarLintAppUtils appUtils;
   private final ApplicationInfo applicationInfo;
   private final ProjectRootManager projectRootManager;
+  private final Supplier<Boolean> powerSaveModeCheck;
+
   private FileExclusions projectExclusions;
   private FileExclusions globalExclusions;
-  private Supplier<Boolean> powerSaveModeCheck;
 
   /**
    * Used by pico container
@@ -63,15 +65,16 @@ public class LocalFileExclusions {
     this(project, settings, projectSettings, appUtils, applicationInfo, projectRootManager, PowerSaveMode::isEnabled);
   }
 
-  public LocalFileExclusions(Project project, SonarLintGlobalSettings settings, SonarLintProjectSettings projectSettings, SonarLintAppUtils appUtils,
+  LocalFileExclusions(Project project, SonarLintGlobalSettings settings, SonarLintProjectSettings projectSettings, SonarLintAppUtils appUtils,
     ApplicationInfo applicationInfo, ProjectRootManager projectRootManager, Supplier<Boolean> powerSaveModeCheck) {
     this.appUtils = appUtils;
     this.applicationInfo = applicationInfo;
     this.projectRootManager = projectRootManager;
+    this.powerSaveModeCheck = powerSaveModeCheck;
+
+    subscribeToSettingsChanges(project);
     loadGlobalExclusions(settings);
     loadProjectExclusions(projectSettings);
-    subscribeToSettingsChanges(project);
-    this.powerSaveModeCheck = powerSaveModeCheck;
   }
 
   private static Set<String> getExclusionsOfType(Collection<ExclusionItem> exclusions, ExclusionItem.Type type) {
@@ -110,7 +113,7 @@ public class LocalFileExclusions {
 
   /**
    * Checks if a file is excluded from analysis based on locally configured exclusions.
-   * It will also exclude files that cannot be analysed with {@link #canAnalyze(VirtualFile, FileType, Module)}.
+   * It will also exclude files that cannot be analysed with {@link #canAnalyze(VirtualFile, Module)}.
    */
   public Result checkExclusions(VirtualFile file, @Nullable Module module) {
     Result result = canAnalyze(file, module);
@@ -147,21 +150,25 @@ public class LocalFileExclusions {
     if (fileIndex.isExcluded(file)) {
       return Result.excluded("file is excluded or ignored in IntelliJ's project structure");
     }
-    if (SonarLintUtils.isGeneratedSoruce(module, fileIndex.getSourceRootForFile(file))) {
-      return Result.excluded("file is generated in IntelliJ's project structure");
-    }
-    if (fileIndex.isInSourceContent(file)) {
-      return Result.notExcluded();
+
+    SourceFolder sourceFolder = SonarLintUtils.getSourceFolder(fileIndex.getSourceRootForFile(file), module);
+    if (sourceFolder != null) {
+      System.out.println(sourceFolder.getRootType());
+      if (SonarLintUtils.isGeneratedSource(sourceFolder)) {
+        return Result.excluded("file is classified as generated in IntelliJ's project structure");
+      }
+      if (SonarLintUtils.isJavaResource(sourceFolder)) {
+        return Result.excluded("file is classified as resource in IntelliJ's project structure");
+      }
     }
 
-    return Result.excluded("file does not belong to sources in IntelliJ's project structure");
+    // the fact that the file doesn't explicitly belong to sources doesn't mean it's not sources.
+    // In WebStorm, for example, everything is considered to be sources unless it is explicitly marked otherwise.
+    return Result.notExcluded();
   }
 
   public Result canAnalyze(VirtualFile file, @Nullable Module module) {
-    return canAnalyze(file, file.getFileType(), module);
-  }
-
-  private Result canAnalyze(VirtualFile file, FileType fileType, @Nullable Module module) {
+    FileType fileType = file.getFileType();
     if (module == null) {
       return Result.excluded("file is not part of any module in IntelliJ's project structure");
     }
